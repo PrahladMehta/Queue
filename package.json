@@ -1,0 +1,26 @@
+{
+  "name": "queuelab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Background job queue on PostgreSQL",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "migrate": "node --env-file=.env scripts/migrate.ts",
+    "enqueue": "node --env-file=.env scripts/enqueue.ts",
+    "worker": "node --env-file=.env scripts/worker.ts",
+    "experiment:naive-claim": "node --env-file=.env scripts/experiments/naive-claim.ts",
+    "test": "node --env-file=.env --test --test-concurrency=1 test/*.test.ts"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.23.1",
+    "typescript": "^7.0.2"
+  }
+}
