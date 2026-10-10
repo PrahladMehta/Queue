@@ -40,10 +40,10 @@ describe('processNextJob', () => {
     assert.equal(log.entries[1]?.fields.jobId, id);
   });
 
-  test('handler throws -> job failed', async () => {
+  test('handler throws on last attempt -> job failed', async () => {
     const handlers = new Map<string, Handler>([['email', async () => { throw new Error('SMTP 550'); }]]);
     const log = createMemoryLogger();
-    const { id } = await enqueue(pool, 'email');
+    const { id } = await enqueue(pool, 'email', {}, { maxAttempts: 1 });
 
     const result = await processNextJob(pool, handlers, log);
 
@@ -85,7 +85,7 @@ describe('runWorker', () => {
       ['bad', async () => { throw new Error('nope'); }],
     ]);
     await enqueue(pool, 'ok');
-    await enqueue(pool, 'bad');
+    await enqueue(pool, 'bad', {}, { maxAttempts: 1 });
     await enqueue(pool, 'ok');
 
     const controller = new AbortController();

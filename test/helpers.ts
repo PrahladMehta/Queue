@@ -23,6 +23,11 @@ export async function resetJobs(pool: Pool): Promise<void> {
   await pool.query('TRUNCATE jobs RESTART IDENTITY');
 }
 
+// "time travel": make every waiting retry due now instead of sleeping in tests
+export async function makeDue(pool: Pool): Promise<void> {
+  await pool.query(`UPDATE jobs SET run_at = now() WHERE status = 'queued'`);
+}
+
 export async function statusCounts(pool: Pool): Promise<Record<string, number>> {
   const result = await pool.query<{ status: string; n: number }>(
     'SELECT status, count(*)::int AS n FROM jobs GROUP BY status',

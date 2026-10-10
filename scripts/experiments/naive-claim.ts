@@ -22,7 +22,11 @@ async function naiveClaim(pool: Pool): Promise<string | null> {
 
 async function race(pool: Pool, label: string, claim: () => Promise<string | null>): Promise<void> {
   await pool.query('DELETE FROM jobs WHERE type = $1', [TYPE]);
-  await pool.query(`INSERT INTO jobs (type) SELECT $1 FROM generate_series(1, $2::int)`, [TYPE, JOBS]);
+  // high max_attempts so double claims show up in the count instead of tripping the CHECK
+  await pool.query(
+    `INSERT INTO jobs (type, max_attempts) SELECT $1, 1000 FROM generate_series(1, $2::int)`,
+    [TYPE, JOBS],
+  );
 
   let claims = 0;
   await Promise.all(
@@ -41,6 +45,16 @@ async function race(pool: Pool, label: string, claim: () => Promise<string | nul
     `${label.padEnd(10)} jobs=${JOBS} claims=${claims} ` +
       `claimed more than once=${s?.doubled} max attempts=${s?.max_attempts}`,
   );
+
+  const leftover = await pool.query(
+    `SELECT id, status, attempts, run_at, clock_timestamp() AS db_now
+     FROM jobs WHERE type = $1 AND status = 'queued' ORDER BY id`,
+    [TYPE],
+  );
+  if (leftover.rowCount !== 0) {
+    console.log(`  ${leftover.rowCount} job(s) never claimed:`);
+    for (const row of leftover.rows.slice(0, 10)) console.log(`  ${JSON.stringify(row)}`);
+  }
 }
 
 const pool = createPool(loadConfig().databaseUrl, WORKERS + 2);

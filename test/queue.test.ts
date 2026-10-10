@@ -24,7 +24,9 @@ describe('enqueue', () => {
     assert.deepEqual(job.payload, { userId: 42 });
     assert.equal(job.status, 'queued');
     assert.equal(job.attempts, 0);
+    assert.equal(job.maxAttempts, 5);
     assert.equal(job.lastError, null);
+    assert.ok(job.runAt instanceof Date);
     assert.ok(job.createdAt instanceof Date);
     assert.equal(job.startedAt, null);
     assert.equal(job.finishedAt, null);

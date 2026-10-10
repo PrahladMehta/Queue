@@ -15,7 +15,9 @@ export interface Job {
   payload: JsonValue;
   status: JobStatus;
   attempts: number;
+  maxAttempts: number;
   lastError: string | null;
+  runAt: Date;
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;

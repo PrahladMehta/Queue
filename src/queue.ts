@@ -30,7 +30,9 @@ interface JobRow {
   payload: JsonValue;
   status: string;
   attempts: number;
+  max_attempts: number;
   last_error: string | null;
+  run_at: Date;
   created_at: Date;
   started_at: Date | null;
   finished_at: Date | null;
@@ -50,20 +52,37 @@ function toJob(row: JobRow): Job {
     payload: row.payload,
     status: row.status,
     attempts: row.attempts,
+    maxAttempts: row.max_attempts,
     lastError: row.last_error,
+    runAt: row.run_at,
     createdAt: row.created_at,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
   };
 }
 
-export async function enqueue(db: Db, type: string, payload: JsonValue = {}): Promise<Job> {
+export interface EnqueueOptions {
+  maxAttempts?: number;
+}
+
+export async function enqueue(db: Db, type: string, payload: JsonValue = {}, options: EnqueueOptions = {}): Promise<Job> {
   if (type.trim() === '') throw new Error('job type must be a non-empty string');
+  const { maxAttempts } = options;
+  if (maxAttempts !== undefined && (!Number.isInteger(maxAttempts) || maxAttempts < 1)) {
+    throw new Error(`maxAttempts must be a positive integer, got ${maxAttempts}`);
+  }
+
   // stringify ourselves: pg sends JS arrays as Postgres arrays, not JSON
-  const result = await db.query<JobRow>(
-    'INSERT INTO jobs (type, payload) VALUES ($1, $2::jsonb) RETURNING *',
-    [type, JSON.stringify(payload)],
-  );
+  const json = JSON.stringify(payload);
+  const result = maxAttempts === undefined
+    ? await db.query<JobRow>(
+        'INSERT INTO jobs (type, payload) VALUES ($1, $2::jsonb) RETURNING *',
+        [type, json],
+      )
+    : await db.query<JobRow>(
+        'INSERT INTO jobs (type, payload, max_attempts) VALUES ($1, $2::jsonb, $3) RETURNING *',
+        [type, json, maxAttempts],
+      );
   const row = result.rows[0];
   if (row === undefined) throw new Error('enqueue: INSERT returned no row');
   return toJob(row);
@@ -75,8 +94,8 @@ const CLAIM_SQL = `
   WHERE  id = (
     SELECT id
     FROM   jobs
-    WHERE  status = 'queued'
-    ORDER  BY id
+    WHERE  status = 'queued' AND run_at <= now()
+    ORDER  BY run_at, id
     LIMIT  1
     FOR UPDATE SKIP LOCKED
   )
@@ -109,6 +128,28 @@ async function finish(db: Db, jobId: string, to: 'succeeded' | 'failed', error: 
 
   const current = await getJob(db, jobId);
   throw new InvalidTransitionError(jobId, to, current?.status ?? null);
+}
+
+// run_at uses the database clock, so workers with skewed clocks still agree
+export async function retryLater(db: Db, jobId: string, error: string, delayMs: number): Promise<Job> {
+  if (!Number.isInteger(delayMs) || delayMs < 0) {
+    throw new Error(`delayMs must be a non-negative integer, got ${delayMs}`);
+  }
+  const result = await db.query<JobRow>(
+    `UPDATE jobs
+     SET    status = 'queued', last_error = $2, run_at = now() + $3::int * interval '1 millisecond'
+     WHERE  id = $1 AND status = 'running' AND attempts < max_attempts
+     RETURNING *`,
+    [jobId, error, delayMs],
+  );
+  const row = result.rows[0];
+  if (row !== undefined) return toJob(row);
+
+  const current = await getJob(db, jobId);
+  if (current?.status === 'running') {
+    throw new Error(`job ${jobId} has no attempts left (${current.attempts}/${current.maxAttempts})`);
+  }
+  throw new InvalidTransitionError(jobId, 'queued', current?.status ?? null);
 }
 
 export async function getJob(db: Db, jobId: string): Promise<Job | null> {

@@ -1,5 +1,6 @@
 import { loadConfig } from '../src/config.ts';
 import { createPool } from '../src/db.ts';
+import { PermanentError } from '../src/errors.ts';
 import { createJsonLogger } from '../src/logger.ts';
 import type { JsonValue } from '../src/types.ts';
 import { runWorker, type Handler } from '../src/worker.ts';
@@ -16,12 +17,20 @@ const handlers = new Map<string, Handler>([
   ['sleep', async (payload) => {
     const ms = field(payload, 'ms');
     if (typeof ms !== 'number' || ms < 0 || ms > 600_000) {
-      throw new Error(`sleep: payload.ms must be a number between 0 and 600000, got ${JSON.stringify(ms)}`);
+      throw new PermanentError(`sleep: payload.ms must be a number between 0 and 600000, got ${JSON.stringify(ms)}`);
     }
     await new Promise((resolve) => setTimeout(resolve, ms));
   }],
   ['fail', async (payload) => {
-    throw new Error(String(field(payload, 'message') ?? 'intentional failure'));
+    const message = String(field(payload, 'message') ?? 'intentional failure');
+    throw field(payload, 'permanent') === 1 ? new PermanentError(message) : new Error(message);
+  }],
+  // fails on the first `failTimes` attempts, then succeeds
+  ['flaky', async (payload, job) => {
+    const failTimes = field(payload, 'failTimes') ?? 2;
+    if (typeof failTimes !== 'number') throw new PermanentError('flaky: payload.failTimes must be a number');
+    if (job.attempts <= failTimes) throw new Error(`flaky: failing attempt ${job.attempts} of ${failTimes}`);
+    console.log(`[job ${job.id}] flaky succeeded on attempt ${job.attempts}`);
   }],
 ]);
 
@@ -44,7 +53,14 @@ process.on('SIGINT', onSignal);
 process.on('SIGTERM', onSignal);
 
 try {
-  await runWorker({ db: pool, handlers, log, pollIntervalMs: config.pollIntervalMs, signal: controller.signal });
+  await runWorker({
+    db: pool,
+    handlers,
+    log,
+    pollIntervalMs: config.pollIntervalMs,
+    retry: config.retry,
+    signal: controller.signal,
+  });
 } finally {
   await pool.end();
 }
